@@ -43,6 +43,305 @@ fn choose_download_conflict(
     }
 }
 
+/// Ask once for a whole batch of downloads over the same local folder: does the
+/// user want the existing files replaced, kept side by side, or the batch
+/// cancelled? Returns `None` when the dialog was dismissed / cancelled.
+fn choose_batch_download_conflict(
+    owner: DialogOwner,
+    count: usize,
+    local_dir: &str,
+) -> Option<DownloadConflict> {
+    let replace = t("替换", "Replace");
+    let keep_both = t("共存", "Keep both");
+    let cancel = t("取消", "Cancel");
+    let result = owner
+        .message()
+        .set_title(t("文件已存在", "File already exists"))
+        .set_description(format!(
+            "{}\n{}",
+            local_dir,
+            if count == 1 {
+                t(
+                    "目标文件夹里已有同名文件。请选择替换现有文件，或保留两份文件。",
+                    "A file with the same name already exists in the target folder. Choose whether to replace it or keep both."
+                )
+                .to_string()
+            } else {
+                format!(
+                    "{} {}",
+                    count,
+                    t(
+                        "项在目标文件夹里已有同名文件。请选择替换现有文件，或保留两份文件。",
+                        "items already exist in the target folder. Choose whether to replace them or keep both."
+                    )
+                )
+            }
+        ))
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+            replace.to_string(),
+            keep_both.to_string(),
+            cancel.to_string(),
+        ))
+        .show();
+    match result {
+        rfd::MessageDialogResult::Yes => Some(DownloadConflict::Replace),
+        rfd::MessageDialogResult::No => Some(DownloadConflict::KeepBoth),
+        rfd::MessageDialogResult::Custom(value) if value == replace => {
+            Some(DownloadConflict::Replace)
+        }
+        rfd::MessageDialogResult::Custom(value) if value == keep_both => {
+            Some(DownloadConflict::KeepBoth)
+        }
+        _ => None,
+    }
+}
+
+/// Copy local paths into the tab's current remote directory.
+fn upload_local_paths(
+    window: &AppWindow,
+    tab_id: &str,
+    sftp_handles: &SftpHandles,
+    paths: Vec<String>,
+) {
+    if paths.is_empty() {
+        return;
+    }
+    let remote_dir = active_sftp_path(window, tab_id);
+    if remote_dir.is_empty() {
+        return;
+    }
+    if let Ok(handles) = sftp_handles.lock() {
+        let Some(handle) = handles.get(tab_id) else {
+            return;
+        };
+        for path in paths {
+            handle.upload(std::path::PathBuf::from(path), remote_dir.clone());
+        }
+        window.set_download_open(true);
+    }
+}
+
+/// Copy remote entries into the folder the tab's local pane is showing.
+fn download_into_local_pane(
+    window: &AppWindow,
+    tab_id: &str,
+    sftp_handles: &SftpHandles,
+    remotes: Vec<String>,
+) {
+    if remotes.is_empty() {
+        return;
+    }
+    let local_dir = current_path(window, tab_id);
+    if local_dir.is_empty() {
+        return;
+    }
+    // One conflict prompt for the whole batch — asking per file would be
+    // miserable for a multi-selection of a hundred items.
+    let overwrites = remotes
+        .iter()
+        .filter(|remote| download_target_path(remote, &local_dir).exists())
+        .count();
+    let conflict = if overwrites == 0 {
+        DownloadConflict::Replace
+    } else {
+        match choose_batch_download_conflict(
+            DialogOwner::of(window.window()),
+            overwrites,
+            &local_dir,
+        ) {
+            Some(conflict) => conflict,
+            None => return,
+        }
+    };
+    if let Ok(handles) = sftp_handles.lock() {
+        if let Some(handle) = handles.get(tab_id) {
+            handle.download_into(remotes, local_dir, conflict);
+            window.set_download_open(true);
+        }
+    }
+}
+
+/// Wire the split (dual-pane) SFTP view: local folder browsing plus the two
+/// transfer directions. The remote side keeps using the existing SFTP worker.
+fn wire_sftp_split_callbacks(window: &AppWindow, sftp_handles: &SftpHandles) {
+    // Toggle the split view; the first open reads the local folder.
+    {
+        let weak = window.as_weak();
+        window.on_sftp_toggle_dual(move |tab_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            let tab = tab_id.to_string();
+            let mut enable = false;
+            let mut path = String::new();
+            let mut loaded = false;
+            for i in 0..model.row_count() {
+                let Some(row) = model.row_data(i) else { continue };
+                if row.id.as_str() != tab {
+                    continue;
+                }
+                enable = !row.sftp_dual;
+                path = row.sftp_local_path.to_string();
+                loaded = row.sftp_local_entries.row_count() > 0;
+                break;
+            }
+            update_terminal_row(model, &tab, |row| row.sftp_dual = enable);
+            if enable && !loaded {
+                let start = std::path::PathBuf::from(&path);
+                let dir = if !path.is_empty() && start.is_dir() {
+                    start
+                } else {
+                    home_dir()
+                };
+                load_dir(&w, &tab, dir);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_navigate(move |tab_id: SharedString, path: SharedString| {
+            if let Some(w) = weak.upgrade() {
+                navigate(&w, tab_id.as_str(), path.as_str());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_up(move |tab_id: SharedString| {
+            if let Some(w) = weak.upgrade() {
+                navigate_up(&w, tab_id.as_str());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_home(move |tab_id: SharedString| {
+            if let Some(w) = weak.upgrade() {
+                load_dir(&w, tab_id.as_str(), home_dir());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_refresh(move |tab_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let path = current_path(&w, tab_id.as_str());
+            let dir = if path.is_empty() {
+                home_dir()
+            } else {
+                std::path::PathBuf::from(path)
+            };
+            load_dir(&w, tab_id.as_str(), dir);
+        });
+    }
+    {
+        window.on_sftp_local_open(move |_tab_id: SharedString, path: SharedString| {
+            // No shell involved: the path is handed to the OS as one opaque
+            // argument (the same helper remote "Open externally" uses).
+            crate::sftp::open_with_os(path.as_str());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_toggle_select(move |tab_id: SharedString, index: i32| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            toggle_selected(model, tab_id.as_str(), index);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_sftp_local_select_range(
+            move |tab_id: SharedString, from: i32, to: i32| {
+                let Some(w) = weak.upgrade() else { return };
+                let terminals = w.get_terminals();
+                let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>()
+                else {
+                    return;
+                };
+                select_range(model, tab_id.as_str(), from, to);
+            },
+        );
+    }
+    {
+        window.on_sftp_local_copy_path(move |path: SharedString| {
+            // Clipboard writes must never run on the UI thread (#sftp-copy-path-freeze).
+            std::thread::spawn(move || clipboard_set_text(path.to_string()));
+        });
+    }
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_local_upload(move |tab_id: SharedString, path: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            upload_local_paths(&w, tab_id.as_str(), &sftp_handles, vec![path.to_string()]);
+        });
+    }
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_local_upload_selected(move |tab_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            let paths = selected_paths(model, tab_id.as_str());
+            upload_local_paths(&w, tab_id.as_str(), &sftp_handles, paths);
+        });
+    }
+    {
+        // Divider moved: remember it on the tab so the OS-drop hit test uses the
+        // same local/remote boundary the user sees.
+        let weak = window.as_weak();
+        window.on_persist_sftp_local_pane_width(move |tab_id: SharedString, width: f32| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            update_terminal_row(model, tab_id.as_str(), |row| {
+                row.sftp_local_pane_width = width;
+            });
+        });
+    }
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_download_to_local(
+            move |tab_id: SharedString, remote: SharedString| {
+                let Some(w) = weak.upgrade() else { return };
+                download_into_local_pane(
+                    &w,
+                    tab_id.as_str(),
+                    &sftp_handles,
+                    vec![remote.to_string()],
+                );
+            },
+        );
+    }
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_download_selected_to_local(move |tab_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(model) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            let remotes = collect_sftp_selected(model, tab_id.as_str());
+            download_into_local_pane(&w, tab_id.as_str(), &sftp_handles, remotes);
+            clear_sftp_selection(model, tab_id.as_str());
+        });
+    }
+}
+
 pub(super) fn wire_sftp_callbacks(
     window: &AppWindow,
     editor: &EditorWindow,
@@ -803,6 +1102,9 @@ pub(super) fn wire_sftp_callbacks(
             }
         });
     }
+
+    // Split (dual-pane) view: local browsing + two-way transfers.
+    wire_sftp_split_callbacks(window, &sftp_handles);
 
     // Built-in editor (#70), detached-window mode. Editor tabs (#494) are
     // wired in editor_tabs::wire_editor_tabs.

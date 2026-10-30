@@ -1402,6 +1402,8 @@ impl ConfigStore {
         self.cache.update_check_disabled = !enabled;
     }
     /// Update download mirrors; the built-in list until the user edits it.
+    /// Desktop only: headless builds have no `update` module.
+    #[cfg(not(feature = "headless"))]
     pub fn update_mirrors(&self) -> Vec<String> {
         self.cache.update_mirrors.clone().unwrap_or_else(|| {
             crate::update::mirror::DEFAULT_MIRRORS

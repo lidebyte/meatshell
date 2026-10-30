@@ -1009,9 +1009,10 @@ export component SftpPanel inherits Rectangle {
     }
 
     // Drag empty space to re-dock; interactive widgets (file list, tree, toolbar
-    // buttons) sit in front and capture their own events (#dock).
+    // buttons) sit in front and capture their own events (#dock). Move cursor
+    // only while dragging; hovering empty space keeps the arrow (#360).
     dock-bg := TouchArea {
-        mouse-cursor: move;
+        mouse-cursor: self.pressed ? move : default;
         moved => {
             if (self.pressed) {
                 root.dock-drag-move(self.absolute-position.x + self.mouse-x,

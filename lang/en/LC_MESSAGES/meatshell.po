@@ -780,3 +780,6 @@ msgstr "Download checked to local folder"
 
 msgid "Selected items"
 msgstr "Selected items"
+
+msgid "System information"
+msgstr "System information"

@@ -3,6 +3,17 @@
 All notable changes are documented here. 本文件记录所有重要变更。
 中英对照（中文在前，English after）.
 
+## [Unreleased]
+
+- **从资源管理器拖文件到双栏会按落点区分去向。** 拖到左侧本机面板即复制到该目录（重名自动保留两份），拖到右侧远程面板或终端区域则照旧上传到远程当前目录；复制在本机后台线程完成，结果写在左侧状态栏。
+- **Files dropped from Explorer go where you drop them in the split view.** Dropping on the local half copies the file into that folder (keeping both on a name clash); dropping on the remote half or the terminal uploads it to the remote directory as before. The copy runs on a background thread and reports the result in the local pane's status line.
+
+- **SFTP 双栏支持拖拽互传。** 双栏模式下，把文件或文件夹从左侧本机列表拖到右侧远程列表即可上传，反向拖动即可下载；被拖动的行若是多个勾选项之一，则整组一起传输。拖动时鼠标旁显示条目名（多选时显示数量），接收文件的那一半会蓝色高亮；拖回同一侧则取消，不会有任何传输。远程行拖出面板外仍然是原来的“拖到资源管理器”。
+- **Drag files between the split view's panes.** In the local/remote split view, drag a file or folder from the local list onto the remote list to upload it, or the other way round to download it; a row that is one of several checked items drags the whole checked set. While dragging, the item name (or a count for a multi-item drag) follows the cursor and the receiving half is highlighted in blue; dropping back on the same side cancels with no transfer. Dragging a remote row outside the panel still starts the existing drag-to-Explorer/Finder.
+
+- **SFTP 新增双栏（本地/远程）模式。** 面板工具栏新增“双栏”按钮：左侧显示本机文件夹，右侧仍是远程目录，两边都可浏览、多选，左右默认各占一半，拖动中间分隔条可调整宽度，双击分隔条恢复居中。本地侧点击“上传”或右键“上传到服务器”，可把勾选的条目（或点击的那一行）连同整个文件夹传到右侧当前目录；远程侧右键“下载到本地文件夹”或“下载选中项到本地文件夹”，则把文件或文件夹直接下载到左侧当前目录，重名时统一询问替换还是保留两份，下载完成后左侧列表自动刷新。工具栏原有的路径栏、书签、排序等仍管理右侧的远程目录。
+- **Split (local/remote) view for SFTP.** A new "Split view" button in the panel toolbar shows this machine's folders on the left while the remote directory stays on the right; both sides can be browsed and multi-selected, they start at an even split, the divider between them can be dragged, and double-clicking it restores the middle. On the local side, "Upload" (or the right-click "Upload to server") sends the checked entries — or the clicked row — including whole folders into the remote folder on the right; on the remote side, "Download to local folder" / "Download checked to local folder" writes files and folders straight into the local folder on the left, asking once whether to replace or keep both when names collide, and the local list refreshes itself when the download finishes. The toolbar's path bar, bookmarks and sorting keep driving the remote side as before.
+
 ## [0.8.0] - 2026-10-23
 
 - **中国大陆用户可通过下载镜像一键更新。** 界面为中文且系统时区为中国大陆时区（按 Asia/Shanghai 等时区名判断，新加坡、香港、台北等其他 UTC+8 地区仍直连 GitHub）时，一键更新可通过镜像下载。“设置 → 软件更新”新增“下载镜像”列表，内置 v4、v6、cdn、axisnow.gh-proxy.org 四个镜像，可添加或删除，右侧显示各下载源（含 GitHub）的测速结果。默认自动选择最快的源，也可点击某一行固定使用；失败时依次换用其他源，最后回到 GitHub。镜像只负责传输，所有下载仍按 GitHub 发布的 SHA-256 校验。

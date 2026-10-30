@@ -1377,6 +1377,18 @@ pub(super) fn wire_session_callbacks(
                     super::sftp_places::string_model(&places.recent)
                 },
                 sftp_bookmarked: false,
+                // Split view starts off; the local pane remembers the home
+                // folder until it is first opened (listing is lazy).
+                sftp_dual: false,
+                sftp_local_path: home_display().into(),
+                sftp_local_entries: ModelRc::from(std::rc::Rc::new(
+                    VecModel::<SftpEntry>::default(),
+                )),
+                sftp_local_status: "".into(),
+                sftp_local_loading: false,
+                sftp_local_selected_count: 0,
+                // 0 = an even local/remote split; set when the divider is dragged.
+                sftp_local_pane_width: 0.0,
                 font_size: 0,
                 tunnels: ModelRc::from(std::rc::Rc::new(VecModel::<TunnelInfo>::default())),
                 sftp_collapsed: !has_sftp || sftp_collapsed_default,
